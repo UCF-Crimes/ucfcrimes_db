@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=66.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ucfcrimes-db"
+version = "0.1.0"
+description = "PostgreSQL loader for the UCF Police Daily Crime Log"
+readme = "README.md"
+requires-python = ">=3.11"
+dynamic = ["dependencies"]
+
+[project.scripts]
+ucfcrimes-db = "ucfcrimes_db.loader:main"
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
+[tool.setuptools.packages.find]
+where = ["src"]
