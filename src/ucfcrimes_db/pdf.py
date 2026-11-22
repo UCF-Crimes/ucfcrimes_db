@@ -1,121 +1,130 @@
-'''
+"""Parse the UCF Police Daily Crime Log.
 
-UCF Crimes: loadcrimes.py
-Written by Ethan Frakes
+Based on the monorepo parser written by Ethan Frakes.
+"""
 
-'''
-
+import re
 from datetime import datetime
 from io import BytesIO
+from typing import TypedDict
 
 import requests
-from PyPDF2 import PdfReader
+from pypdf import PdfReader
+
+DAILY_LOG_URL = "https://police.ucf.edu/wp-content/uploads/clery/ALL%20DAILY%20crime%20log.pdf"
+CAMPUS_STARTS = ("MAIN", "UCF", "ROSEN")
+DISPOSITIONS = ("UNFOUNDED", "EXC", "ARREST", "INACTIVE", "CLOSED", "OPEN", "ACTIVE", "REPORT")
+CASE_ID = re.compile(r"\d{4}-(?:\d{4}|[A-Za-z]{3}\d{2})")
+TITLE_WORDS = re.compile(r"\b(?:TRAFFIC|TRESPASSING|DRUG|LAW|WARRANT)\b")
+JOINED_COLUMN = re.compile(r"(?<=\S)(?:" + "|".join(CAMPUS_STARTS + DISPOSITIONS) + ")")
+JOINED_ROSEN_COLUMN = re.compile(r"(?:HOSPITALITY|MANAGEMENT)(?=\S)")
+DATE_FORMATS = ("%m/%d/%y", "%m/%d/%Y")
 
 
-# Returns if date string token passed is valid.
-def is_valid_date(date_string: str) -> bool:
-    # First is for mm/dd/yy and second is for mm/dd/yyyy
-    valid_formats = ['%m/%d/%y', '%m/%d/%Y']
-    for date_format in valid_formats:
+class CrimeReport(TypedDict):
+    case_id: str
+    title: str
+    campus: str
+    disposition: str
+    report_dt: str
+    start_dt: str
+    end_dt: str
+    address: str
+
+
+def parse_date(value: str) -> datetime:
+    for date_format in DATE_FORMATS:
         try:
-            datetime.strptime(date_string, date_format)
-            return True
+            return datetime.strptime(value, date_format)
         except ValueError:
-            pass
-    return False
+            continue
+    raise ValueError(f"Invalid date: {value!r}")
 
-# Returns if time string token passed is valid.
-def is_valid_time_label(time_str: str) -> bool:
+
+def is_date(value: str) -> bool:
     try:
-        datetime.strptime(time_str, '%H:%M')
-        return True
+        parse_date(value)
     except ValueError:
         return False
-
-# Tokenizes each crime into separate elements of a 2D string array, where each 1st dimension
-# element is each crime and each 2nd dimension element is each space/newline delimited string.
-def tokenizer(page) -> list:
-
-    # Text extracted from page and split between spaces and newlines.
-    crime_list = []
-    text = page.extract_text()
-    textToken = text.split()
-    buffer_list = []
-    valid_delimiters = ["Incident", "UNFOUNDED", "EXC", "ARREST", "INACTIVE",
-                        "CLOSED", "OPEN", "ACTIVE", "REPORT"]
-
-    # For each string in the textToken, if the string is one of the valid delimiters above
-    # (end of one crime and beginning of another), buffer list is added to the crime list.
-    for elem in range(len(textToken)):
-        for delimiter in valid_delimiters:
-            if delimiter == "ARREST" and textToken[elem] == delimiter and textToken[elem + 1:elem + 2] == ["-"]:
-                crime_list.append(buffer_list)
-                buffer_list = []
-
-            elif delimiter != "ARREST" and textToken[elem] == delimiter:
-                crime_list.append(buffer_list)
-                buffer_list = []
-
-        buffer_list.append(textToken[elem])
-
-    crime_list.append(buffer_list)
-    return crime_list
-
-# Parses each crime element by grouping unjoined tokens together that correspond to the same
-# dictionary key.
-def parser(crime_list: list) -> list:
-    crime_list_len = len(crime_list)
-
-    for i in range(crime_list_len):
-        for j, elem in enumerate(crime_list[i]):
-            if elem == "ARREST":
-                crime_list[i][j] += " " + crime_list[i][j+1] + " " + crime_list[i][j+2]
-                crime_list[i].remove(crime_list[i][j+1])
-                crime_list[i].remove(crime_list[i][j+1])
-
-            elif elem == "EXC":
-                crime_list[i][j] += " " + crime_list[i][j+1] + " " + crime_list[i][j+2] + " " + crime_list[i][j+3]
-                crime_list[i].remove(crime_list[i][j+1])
-                crime_list[i].remove(crime_list[i][j+1])
-                crime_list[i].remove(crime_list[i][j+1])
-
-            elif is_valid_time_label(crime_list[i][j]):
-                j += 1
-                while j + 1 < len(crime_list[i]) and not is_valid_date(crime_list[i][j+1]) and not is_valid_time_label(crime_list[i][j+1]):
-                    crime_list[i][j] += " " + crime_list[i][j+1]
-                    crime_list[i].remove(crime_list[i][j+1])
-
-        try:
-            if is_valid_date(crime_list[i][4][-8:]):
-                    crime_list[i].insert(5, crime_list[i][4][-8:])
-                    crime_list[i][4] = crime_list[i][4][:-8].strip()
-        except IndexError: pass
-
-        if len(crime_list[i]) == 10 and is_valid_time_label(crime_list[i][-1]):
-            crime_list[i].append("UNSPECIFIED CAMPUS")
-
-        if len(crime_list[i]) == 11:
-            crime_list[i][2] += " " + crime_list[i][3]
-            crime_list[i][5] += " " + crime_list[i][6]
-            crime_list[i][8] += " " + crime_list[i][9]
-            del crime_list[i][3]
-            del crime_list[i][5]
-            del crime_list[i][7]
-
-    return crime_list
-
-COLUMNS = ("disposition", "case_id", "report_dt", "crime", "start_dt", "location", "end_dt", "campus")
-DAILY_LOG_URL = "https://police.ucf.edu/sites/default/files/logs/ALL%20DAILY%20crime%20log.pdf"
+    return True
 
 
-def crime_load() -> list[dict[str, str]]:
-    response = requests.get(DAILY_LOG_URL, timeout=30)
-    response.raise_for_status()
-    reader = PdfReader(BytesIO(response.content))
+def format_timestamp(day: str, clock: str) -> str:
+    timestamp = datetime.combine(parse_date(day).date(), datetime.strptime(clock, "%H:%M").time())
+    return timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
 
+
+def tokenize_page(text: str) -> list[list[str]]:
+    text = JOINED_COLUMN.sub(r" \g<0>", text)
+    text = JOINED_ROSEN_COLUMN.sub(r"\g<0> ", text)
+
+    rows = []
+    current = []
+    for token in text.split():
+        if CASE_ID.fullmatch(token):
+            if current:
+                rows.append(current)
+            current = [token]
+        elif current:
+            current.append(token)
+    if current:
+        rows.append(current)
+    return rows
+
+
+def parse_case(tokens: list[str]) -> CrimeReport:
+    title_end = 2
+    while tokens[title_end] not in CAMPUS_STARTS:
+        if tokens[title_end] in DISPOSITIONS and not TITLE_WORDS.search(" ".join(tokens[1:title_end])):
+            break
+        title_end += 1
+
+    if tokens[title_end] in DISPOSITIONS:
+        campus = "UNSPECIFIED CAMPUS"
+        disposition_start = title_end
+    else:
+        disposition_start = title_end + 1
+        while tokens[disposition_start] not in DISPOSITIONS:
+            disposition_start += 1
+        campus = " ".join(tokens[title_end:disposition_start])
+
+    date_start = disposition_start + 1
+    while not is_date(tokens[date_start]):
+        date_start += 1
+
+    report_day, report_time, start_day, start_time, end_day, end_time = tokens[date_start:date_start + 6]
+    address = " ".join(tokens[date_start + 6:])
+    if not address:
+        raise ValueError("Missing address")
+
+    return {
+        "case_id": tokens[0],
+        "title": " ".join(tokens[1:title_end]),
+        "campus": campus,
+        "disposition": " ".join(tokens[disposition_start:date_start]),
+        "report_dt": format_timestamp(report_day, report_time),
+        "start_dt": format_timestamp(start_day, start_time),
+        "end_dt": format_timestamp(end_day, end_time),
+        "address": address,
+    }
+
+
+def parse_pdf(content: bytes) -> list[CrimeReport]:
+    reader = PdfReader(BytesIO(content))
     cases = []
     for page in reader.pages:
-        for row in parser(tokenizer(page)):
-            if len(row) == len(COLUMNS):
-                cases.append(dict(zip(COLUMNS, row)))
+        for tokens in tokenize_page(page.extract_text() or ""):
+            try:
+                cases.append(parse_case(tokens))
+            except (IndexError, ValueError):
+                print(f"Skipping incomplete or invalid report {tokens[0]}")
+
+    if not cases:
+        raise ValueError("The daily crime log contained no cases in the expected format.")
     return cases
+
+
+def crime_load() -> list[CrimeReport]:
+    response = requests.get(DAILY_LOG_URL, timeout=30)
+    response.raise_for_status()
+    return parse_pdf(response.content)

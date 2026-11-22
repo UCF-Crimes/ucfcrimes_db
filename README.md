@@ -1,8 +1,6 @@
 # UCF Crimes database loader
 
-This loader imports cases from the UCF Police Daily Crime Log into PostgreSQL. It checks on startup, then checks again daily at 12:03 a.m. in the host's local time.
-
-This version expects the original PDF layout. The legacy UCF log URL currently returns HTTP 404, so live ingestion requires the current feed importer.
+Imports the [UCF Police Daily Crime Log](https://police.ucf.edu/clery-act/daily-crime-log/) into the PostgreSQL table used by the UCF Crimes publishers. A run inserts new cases, updates existing cases by `case_id`, and writes a daily CSV snapshot under `backups/`.
 
 ## Setup
 
@@ -13,13 +11,17 @@ python -m pip install .
 cp config.example.ini config.ini
 ```
 
-Fill in the PostgreSQL connection settings and table name in `config.ini`. The existing table uses `id`, `case_id`, `disposition`, `report_dt`, `crime`, `start_dt`, `location`, `end_dt`, and `campus`. The loader uses the highest `id` to pick up where it left off.
+Set the database connection details in `config.ini`. By default the loader uses the existing `crimes` table with `case_id`, `title`, `campus`, `disposition`, `report_dt`, `start_dt`, `end_dt`, `address`, `place`, `lat`, and `lng` columns. The publishers expect the date fields in ISO timestamp format. The earlier `cases` table uses a different schema.
+
+Set `google_maps_api_key` to enable Google geocoding for new cases. The loader also supports the monorepo's `[POSTGRESQL]` section and `[DISCORD]` section's `GMAPS_API_KEY`. Set `table = crimes` if the copied configuration contains a placeholder table name.
+
+## Run
 
 ```sh
-ucfcrimes-db --config config.ini
+ucfcrimes-db --config config.ini --once
 ```
 
-The same command is available as `python -m ucfcrimes_db`. Python source is in `src/ucfcrimes_db/`, and direct dependencies are in `requirements.txt`.
+Use `--once` for cron or another external scheduler. With no `--once` flag, the loader runs on startup and again daily at 12:03 a.m. in the host's local time. Both modes are also available via `python -m ucfcrimes_db`.
 
 ### Disclaimers
 UCF Crimes gathers data from the UCFPD daily crime log and posts information to Instagram and Discord. Incidents are made public according to the Clery Act, a federal law that requires all U.S. colleges and universities (including foreign campuses of U.S. institutions), both public and private, to participate in federal student aid programs to maintain and disclose certain crime statistics and campus security/fire information. All information republished by UCF Crimes is gathered directly from the UCFPD daily crime log, and no erroneous or false information is injected into the posts.

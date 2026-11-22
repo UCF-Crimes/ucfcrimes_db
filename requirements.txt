@@ -1,3 +1,4 @@
+editdistance>=0.8,<1
 psycopg2-binary>=2.9,<3
-PyPDF2==3.0.1
+pypdf>=5,<8
 requests>=2.31,<3
